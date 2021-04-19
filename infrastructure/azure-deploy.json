@@ -1,0 +1,372 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "type": "string",
+            "defaultValue": "[resourceGroup().location]",
+            "metadata": {
+                "description": "Location for all resources."
+            }
+        },
+        "administratorLogin": {
+            "type": "string",
+            "defaultValue": "InsecureAdminLogin",
+            "metadata": {
+                "description": "The administrator username of the SQL logical server."
+            }
+        },
+        "administratorLoginPassword": {
+            "type": "securestring",
+            "metadata": {
+                "description": "The administrator password of the SQL logical server."
+            }
+        }
+    },
+    "variables": {
+        "storeFrontAppName": "[concat('storeFrontApp-', uniqueString(resourceGroup().id))]",
+        "rewardsAppName": "[concat('rewardsApp-', uniqueString(resourceGroup().id))]",
+        "operationsAppName": "[concat('operationsApp-', uniqueString(resourceGroup().id))]",
+        "appCurrentStack": "dotnet",
+        "appNetFrameworkVersion": "v5.0",
+        "appHostingPlanName": "[concat('appHostingPlan-', uniqueString(resourceGroup().id))]",
+        "sqlLogicalServerName": "[concat('sqlLogicalServer-', uniqueString(resourceGroup().id))]",
+        "storeFrontSqlDBName": "BurgerJointStoreFront",
+        "rewardsSqlDBName": "BurgerJointRewards",
+        "eventHubSku": "Standard",
+        "eventHubNamespaceName": "[concat('eventHubNamespace-', uniqueString(resourceGroup().id))]",
+        "eventHubName": "orders",
+        "eventHubSendAuthorizationRuleName": "SendAndListenOnly",
+        "eventHubSendRuleId": "[resourceId('Microsoft.EventHub/namespaces/eventhubs/authorizationRules', variables('eventHubNamespaceName'),variables('eventHubName'), variables('eventHubSendAuthorizationRuleName'))]",
+        "eventHubsStorageAccountName": "[concat('hubsstore', uniqueString(resourceGroup().id))]",
+        "rewardsAppConsumerGroupName": "rewards",
+        "operationsAppConsumerGroupName": "operations",
+        "eventHubsCheckpointStoreContainerName": "checkpoint-store"
+    },
+    "resources": [
+        {
+            "apiVersion": "2020-06-01",
+            "name": "[variables('storeFrontAppName')]",
+            "type": "Microsoft.Web/sites",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/serverfarms/', variables('appHostingPlanName'))]",
+                "[resourceId('Microsoft.EventHub/namespaces/eventhubs/', variables('eventHubNamespaceName'), variables('eventHubName'))]"
+            ],
+            "properties": {
+                "siteConfig": {
+                    "connectionStrings": [
+                        {
+                            "name": "BurgerJointStoreFront",
+                            "type": "SQLAzure",
+                            "connectionString": "[concat('Server=tcp:',
+                            variables('sqlLogicalServerName'),
+                            '.database.windows.net,1433;Initial Catalog=',
+                            variables('storeFrontSqlDBName'),
+                            ';Persist Security Info=False;User ID=',
+                            parameters('administratorLogin'),
+                            ';Password=',
+                            parameters('administratorLoginPassword'),
+                            ';MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;')]"
+                        }
+                    ],
+                    "appSettings": [
+                        {
+                            "name": "UseAzure",
+                            "value": true
+                        },
+                        {
+                            "name": "EventHubsOrderEventPublisherSettings:ConnectionString",
+                            "value": "[listKeys(variables('eventHubSendRuleId'), providers('Microsoft.EventHub', 'namespaces/eventHubs').apiVersions[0]).primaryConnectionString]"
+                        }
+                    ],
+                    "metadata": [
+                        {
+                            "name": "CURRENT_STACK",
+                            "value": "[variables('appCurrentStack')]"
+                        }
+                    ],
+                    "netFrameworkVersion": "[variables('appNetFrameworkVersion')]",
+                    "alwaysOn": false
+                },
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('appHostingPlanName'))]"
+            }
+        },
+        {
+            "apiVersion": "2020-06-01",
+            "name": "[variables('rewardsAppName')]",
+            "type": "Microsoft.Web/sites",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/serverfarms/', variables('appHostingPlanName'))]",
+                "[resourceId('Microsoft.EventHub/namespaces/eventhubs/', variables('eventHubNamespaceName'), variables('eventHubName'))]",
+                "[resourceId('Microsoft.Storage/storageAccounts/', variables('eventHubsStorageAccountName'))]"
+            ],
+            "properties": {
+                "siteConfig": {
+                    "connectionStrings": [
+                        {
+                            "name": "BurgerJointRewards",
+                            "type": "SQLAzure",
+                            "connectionString": "[concat('Server=tcp:',
+                            variables('sqlLogicalServerName'),
+                            '.database.windows.net,1433;Initial Catalog=',
+                            variables('rewardsSqlDBName'),
+                            ';Persist Security Info=False;User ID=',
+                            parameters('administratorLogin'),
+                            ';Password=',
+                            parameters('administratorLoginPassword'),
+                            ';MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;')]"
+                        }
+                    ],
+                    "appSettings": [
+                        {
+                            "name": "UseAzure",
+                            "value": true
+                        },
+                        {
+                            "name": "EventHubsOrderEventConsumerSettings:ConnectionString",
+                            "value": "[listKeys(variables('eventHubSendRuleId'), providers('Microsoft.EventHub', 'namespaces/eventHubs').apiVersions[0]).primaryConnectionString]"
+                        },
+                        {
+                            "name": "EventHubsOrderEventConsumerSettings:ConsumerGroup",
+                            "value": "[variables('rewardsAppConsumerGroupName')]"
+                        },
+                        {
+                            "name": "EventHubsOrderEventConsumerSettings:CheckpointStoreConnectionString",
+                            "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('eventHubsStorageAccountName'), ';AccountKey=', listKeys(resourceId(resourceGroup().name,'Microsoft.Storage/storageAccounts', variables('eventHubsStorageAccountName')), '2019-04-01').keys[0].value,';EndpointSuffix=core.windows.net')]"
+                        },
+                        {
+                            "name": "EventHubsOrderEventConsumerSettings:CheckpointStoreName",
+                            "value": "[variables('eventHubsCheckpointStoreContainerName')]"
+                        }
+                    ],
+                    "metadata": [
+                        {
+                            "name": "CURRENT_STACK",
+                            "value": "[variables('appCurrentStack')]"
+                        }
+                    ],
+                    "netFrameworkVersion": "[variables('appNetFrameworkVersion')]",
+                    "alwaysOn": true
+                },
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('appHostingPlanName'))]"
+            }
+        },
+        {
+            "apiVersion": "2020-06-01",
+            "name": "[variables('operationsAppName')]",
+            "type": "Microsoft.Web/sites",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/serverfarms/', variables('appHostingPlanName'))]",
+                "[resourceId('Microsoft.EventHub/namespaces/eventhubs/', variables('eventHubNamespaceName'), variables('eventHubName'))]",
+                "[resourceId('Microsoft.Storage/storageAccounts/', variables('eventHubsStorageAccountName'))]"
+            ],
+            "properties": {
+                "siteConfig": {
+                    "appSettings": [
+                        {
+                            "name": "UseAzure",
+                            "value": true
+                        },
+                        {
+                            "name": "EventHubsOrderEventConsumerSettings:ConnectionString",
+                            "value": "[listKeys(variables('eventHubSendRuleId'), providers('Microsoft.EventHub', 'namespaces/eventHubs').apiVersions[0]).primaryConnectionString]"
+                        },
+                        {
+                            "name": "EventHubsOrderEventConsumerSettings:ConsumerGroup",
+                            "value": "[variables('operationsAppConsumerGroupName')]"
+                        },
+                        {
+                            "name": "EventHubsOrderEventConsumerSettings:CheckpointStoreConnectionString",
+                            "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('eventHubsStorageAccountName'), ';AccountKey=', listKeys(resourceId(resourceGroup().name,'Microsoft.Storage/storageAccounts', variables('eventHubsStorageAccountName')), '2019-04-01').keys[0].value,';EndpointSuffix=core.windows.net')]"
+                        },
+                        {
+                            "name": "EventHubsOrderEventConsumerSettings:CheckpointStoreName",
+                            "value": "[variables('eventHubsCheckpointStoreContainerName')]"
+                        }
+                    ],
+                    "metadata": [
+                        {
+                            "name": "CURRENT_STACK",
+                            "value": "[variables('appCurrentStack')]"
+                        }
+                    ],
+                    "netFrameworkVersion": "[variables('appNetFrameworkVersion')]",
+                    "alwaysOn": true
+                },
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('appHostingPlanName'))]"
+            }
+        },
+        {
+            "apiVersion": "2020-06-01",
+            "name": "[variables('appHostingPlanName')]",
+            "type": "Microsoft.Web/serverfarms",
+            "location": "[parameters('location')]",
+            "properties": {
+                "name": "[variables('appHostingPlanName')]",
+                "workerSize": "0",
+                "workerSizeId": 0,
+                "numberOfWorkers": 1
+            },
+            "sku": {
+                "Tier": "Basic",
+                "Name": "B1"
+            }
+        },
+        {
+            "type": "Microsoft.Sql/servers",
+            "apiVersion": "2020-02-02-preview",
+            "name": "[variables('sqlLogicalServerName')]",
+            "location": "[parameters('location')]",
+            "properties": {
+                "administratorLogin": "[parameters('administratorLogin')]",
+                "administratorLoginPassword": "[parameters('administratorLoginPassword')]"
+            },
+            "resources": [
+                {
+                    "type": "databases",
+                    "apiVersion": "2020-08-01-preview",
+                    "name": "[variables('storeFrontSqlDBName')]",
+                    "location": "[parameters('location')]",
+                    "sku": {
+                        "name": "GP_S_Gen5",
+                        "tier": "GeneralPurpose",
+                        "family": "Gen5",
+                        "capacity": 1
+                    },
+                    "dependsOn": [
+                        "[resourceId('Microsoft.Sql/servers', concat(variables('sqlLogicalServerName')))]"
+                    ]
+                },
+                {
+                    "type": "databases",
+                    "apiVersion": "2020-08-01-preview",
+                    "name": "[variables('rewardsSqlDBName')]",
+                    "location": "[parameters('location')]",
+                    "sku": {
+                        "name": "GP_S_Gen5",
+                        "tier": "GeneralPurpose",
+                        "family": "Gen5",
+                        "capacity": 1
+                    },
+                    "dependsOn": [
+                        "[resourceId('Microsoft.Sql/servers', concat(variables('sqlLogicalServerName')))]"
+                    ]
+                },
+                {
+                    // not ideal, should probably be using VNets and stuff, but good enough for demos
+                    "name": "AllowAllMicrosoftAzureIps",
+                    "type": "firewallrules",
+                    "apiVersion": "2020-08-01-preview",
+                    "location": "[parameters('location')]",
+                    "dependsOn": [
+                        "[resourceId('Microsoft.Sql/servers', concat(variables('sqlLogicalServerName')))]"
+                    ],
+                    "properties": {
+                        "endIpAddress": "0.0.0.0",
+                        "startIpAddress": "0.0.0.0"
+                    }
+                }
+            ]
+        },
+        {
+            "type": "Microsoft.EventHub/namespaces",
+            "apiVersion": "2018-01-01-preview",
+            "name": "[variables('eventHubNamespaceName')]",
+            "location": "[parameters('location')]",
+            "sku": {
+                "name": "[variables('eventHubSku')]",
+                "tier": "[variables('eventHubSku')]",
+                "capacity": 1
+            },
+            "properties": {
+                "isAutoInflateEnabled": false,
+                "maximumThroughputUnits": 0
+            }
+        },
+        {
+            "type": "Microsoft.EventHub/namespaces/eventhubs",
+            "apiVersion": "2017-04-01",
+            "name": "[concat(variables('eventHubNamespaceName'), '/', variables('eventHubName'))]",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.EventHub/namespaces', variables('eventHubNamespaceName'))]"
+            ],
+            "properties": {
+                "messageRetentionInDays": 1,
+                "partitionCount": 3
+            },
+            "resources": [
+                {
+                    "apiVersion": "2017-04-01",
+                    "name": "[variables('eventHubSendAuthorizationRuleName')]",
+                    "type": "authorizationRules",
+                    "dependsOn": [
+                        "[concat('Microsoft.EventHub/namespaces/', variables('eventHubNamespaceName'),'/eventhubs/',variables('eventHubName'))]"
+                    ],
+                    "properties": {
+                        "rights": [
+                            "Send",
+                            "Listen"
+                        ]
+                    }
+                },
+                {
+                    "apiVersion": "2017-04-01",
+                    "name": "[variables('rewardsAppConsumerGroupName')]",
+                    "type": "consumergroups",
+                    "dependsOn": [ "[variables('eventHubName')]" ]
+                },
+                {
+                    "apiVersion": "2017-04-01",
+                    "name": "[variables('operationsAppConsumerGroupName')]",
+                    "type": "consumergroups",
+                    "dependsOn": [ "[variables('eventHubName')]" ]
+                }
+            ]
+        },
+        {
+            "name": "[variables('eventHubsStorageAccountName')]",
+            "type": "Microsoft.Storage/storageAccounts",
+            "apiVersion": "2020-08-01-preview",
+            "location": "[resourceGroup().location]",
+            "kind": "StorageV2",
+            "sku": {
+                "name": "Standard_LRS",
+                "tier": "Standard"
+            },
+            "properties": {
+                "accessTier": "Hot"
+            },
+            "resources": [
+                {
+                    "type": "blobServices/containers",
+                    "apiVersion": "2018-03-01-preview",
+                    "name": "[concat('default/', variables('eventHubsCheckpointStoreContainerName'))]",
+                    "dependsOn": [
+                        "[variables('eventHubsStorageAccountName')]"
+                    ],
+                    "properties": {
+                        "publicAccess": "None"
+                    }
+                }
+            ]
+        }
+    ],
+    "outputs": {
+        "storeFrontAppName": {
+            "type": "string",
+            "value": "[variables('storeFrontAppName')]"
+        },
+        "rewardsAppName": {
+            "type": "string",
+            "value": "[variables('rewardsAppName')]"
+        },
+        "operationsAppName": {
+            "type": "string",
+            "value": "[variables('operationsAppName')]"
+        }
+    }
+}

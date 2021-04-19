@@ -1,0 +1,33 @@
+@page
+
+@{
+    Layout = null;
+}
+
+<h1>Rewards Dashboard</h1>
+<ul id="events"></ul>
+
+<script 
+    src="https://cdnjs.cloudflare.com/ajax/libs/aspnet-signalr/1.0.26/signalr.min.js"
+    integrity="sha512-b6eoEcu0xfFPMuNtfGgk0HXtbwep2u4Zfyu7yowAF+4IfMDHfvbro13zeZnrtYr0nV/10bBogonVRK+7kOSmfw=="
+    crossorigin="anonymous"></script>
+
+<script type="application/javascript">
+"use strict";
+
+window.onload = _ => {
+  const connection = new signalR.HubConnectionBuilder().withUrl('/dashboard/hub').build();
+  const events = document.getElementById('events')
+  
+  connection.on("ReceiveEvent", eventInfo => {
+      const {occurredAt, detail} = eventInfo;
+      
+      const eventElement = document.createElement('li');
+      eventElement.innerText = `${occurredAt} - ${detail}`;
+      
+      events.prepend(eventElement);
+  });
+  
+  connection.start();   
+};
+</script>

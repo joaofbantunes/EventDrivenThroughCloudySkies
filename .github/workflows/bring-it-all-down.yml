@@ -1,0 +1,27 @@
+name: Bring it all down
+on: [workflow_dispatch]
+
+env:
+  RESOURCE_GROUP_NAME: 'EventDrivenThroughCloudySkies'
+
+jobs:
+  bring-it-all-down:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Login to Azure
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
+    - name: Delete resource group
+      uses: Azure/CLI@v1
+      with:
+        inlineScript: |
+          #!/bin/bash
+          if $(az group exists --name ${{ env.RESOURCE_GROUP_NAME }}) ; then
+            echo "Deleting Azure resource group..."
+            az group delete --name ${{ env.RESOURCE_GROUP_NAME }} -y
+            echo "Azure resource group deleted"
+          else            
+            echo "Azure resource group doesn't exist, skipping deletion"
+          fi

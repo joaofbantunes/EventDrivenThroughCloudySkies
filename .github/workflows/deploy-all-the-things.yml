@@ -1,0 +1,67 @@
+name: Deploy all the things
+on: [workflow_dispatch]
+
+env:
+  RESOURCE_GROUP_NAME: 'EventDrivenThroughCloudySkies'
+  RESOURCE_GROUP_LOCATION: 'westeurope'
+  DOTNET_VERSION: '5.0.*'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@master
+
+    - name: Login to Azure
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
+    - name: Create resource group
+      uses: Azure/CLI@v1
+      with:
+        inlineScript: |
+          #!/bin/bash
+          if $(az group exists --name ${{ env.RESOURCE_GROUP_NAME }}) ; then
+            echo "Azure resource group already exists, skipping creation..."
+          else
+            az group create --name ${{ env.RESOURCE_GROUP_NAME }} --location ${{ env.RESOURCE_GROUP_LOCATION }}
+            echo "Azure resource group created"
+          fi
+    
+    - name: Deploy ARM template
+      id: deploy-arm
+      uses: azure/arm-deploy@v1
+      with:
+        resourceGroupName: ${{ env.RESOURCE_GROUP_NAME }}
+        template: ./infrastructure/azure-deploy.json
+        parameters: administratorLoginPassword=${{ secrets.SQL_ADMIN_PASSWORD }}
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v1
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }} 
+    
+    - name: dotnet publish
+      run: |
+        dotnet publish ./src/BurgerJoint.StoreFront/ -c Release -o './storefront-artifacts'
+        dotnet publish ./src/BurgerJoint.Rewards/ -c Release -o './rewards-artifacts'
+        dotnet publish ./src/BurgerJoint.Operations/ -c Release -o './operations-artifacts'
+        
+    - name: Deploy StoreFront
+      uses: azure/webapps-deploy@v2
+      with: 
+        app-name: ${{ steps.deploy-arm.outputs.storeFrontAppName }}
+        package: './storefront-artifacts'
+    
+    - name: Deploy Rewards
+      uses: azure/webapps-deploy@v2
+      with: 
+        app-name: ${{ steps.deploy-arm.outputs.rewardsAppName }}
+        package: './rewards-artifacts'
+    
+    - name: Deploy Operations
+      uses: azure/webapps-deploy@v2
+      with: 
+        app-name: ${{ steps.deploy-arm.outputs.operationsAppName }}
+        package: './operations-artifacts'
